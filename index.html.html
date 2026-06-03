@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>年金通知書ビューア</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue: #1a3a6b;
+      --blue-light: #2a5096;
+      --bg: #f0f2f5;
+      --white: #fff;
+      --border: #dde3ed;
+      --red: #c0392b;
+      --text: #222;
+      --muted: #666;
+    }
+
+    body {
+      font-family: 'Meiryo', 'Yu Gothic UI', 'Hiragino Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ===== HEADER ===== */
+    #header {
+      background: var(--blue);
+      color: #fff;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    #header-left { display: flex; align-items: center; gap: 10px; }
+    #header h1 { font-size: 16px; font-weight: bold; }
+    #header-sub { font-size: 11px; opacity: .75; }
+
+    /* ===== LAYOUT ===== */
+    #layout {
+      display: flex;
+      height: calc(100vh - 50px);
+    }
+
+    /* ===== SIDEBAR ===== */
+    #sidebar {
+      width: 260px;
+      min-width: 220px;
+      background: var(--white);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    #sidebar-upload {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #upload-btn {
+      width: 100%;
+      padding: 10px;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background .15s;
+    }
+    #upload-btn:hover { background: var(--blue-light); }
+
+    #file-input { display: none; }
+
+    #sidebar-history {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+
+    #history-label {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 14px 6px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .hist-item {
+      padding: 9px 14px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background .1s;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .hist-item:hover { background: #f4f6fa; }
+    .hist-item.active {
+      background: #eef3fb;
+      border-left-color: var(--blue);
+    }
+    .hist-item-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .hist-item-body { min-width: 0; flex: 1; }
+    .hist-item-name {
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hist-item-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .hist-item-del {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: #bbb;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .hist-item-del:hover { color: var(--red); background: #fdf0ef; }
+
+    #empty-hist {
+      padding: 24px 14px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ===== MAIN ===== */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ===== DROP OVERLAY ===== */
+    #drop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(26,58,107,.85);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 22px;
+      font-weight: bold;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #drop-overlay.show { display: flex; }
+
+    /* ===== WELCOME ===== */
+    #welcome {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      color: var(--muted);
+      padding: 40px;
+      text-align: center;
+    }
+    #welcome .big-icon { font-size: 64px; }
+    #welcome h2 { font-size: 18px; color: var(--blue); }
+    #welcome p { font-size: 14px; line-height: 1.7; }
+
+    /* ===== VIEWER ===== */
+    #viewer { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+    #viewer.show { display: flex; }
+
+    #doc-tabs-bar {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 4px;
+      flex-wrap: wrap;
+      min-height: 42px;
+    }
+    .doc-tab {
+      padding: 8px 14px;
+      border: none;
+      border-bottom: 3px solid transparent;
+      background: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--muted);
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .doc-tab:hover { color: var(--blue); }
+    .doc-tab.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: bold; }
+
+    #toolbar {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 7px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      font-weight: bold;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: background .15s;
+      white-space: nowrap;
+    }
+    .btn-pdf { background: var(--red); color: #fff; }
+    .btn-pdf:hover { background: #e74c3c; }
+.btn-html { background: #6c757d; color: #fff; }
+    .btn-html:hover { background: #5a6268; }
+    .btn-ghost { background: #f0f2f5; color: var(--blue); }
+    .btn-ghost:hover { background: #dde3ed; }
+
+    #iframe-wrap {
+      flex: 1;
+      overflow: hidden;
+      padding: 12px;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    #doc-frame {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    }
+
+    /* ===== ERROR ===== */
+    #error-bar {
+      display: none;
+      background: #fdf0ef;
+      border-top: 3px solid var(--red);
+      color: var(--red);
+      padding: 10px 16px;
+      font-size: 13px;
+    }
+
+    /* ===== LOADING ===== */
+    #loading {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(255,255,255,.8);
+      z-index: 150;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 14px;
+      color: var(--blue);
+    }
+    #loading.show { display: flex; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 4px solid #dde3ed;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 600px) {
+      #sidebar { width: 200px; min-width: 160px; }
+      #header h1 { font-size: 14px; }
+    }
+    @media (max-width: 480px) {
+      #sidebar { display: none; }
+    }
+
+    /* ===== PRINT ===== */
+    @media print {
+      #header, #sidebar, #doc-tabs-bar, #toolbar, #loading, #drop-overlay { display: none !important; }
+      #layout { height: auto; display: block; }
+      #main { display: block; }
+      #viewer { display: block !important; }
+      #iframe-wrap { padding: 0; overflow: visible; }
+      #doc-frame { border: none; box-shadow: none; min-height: 0; }
+      body { background: white; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="header">
+  <div id="header-left">
+    <span style="font-size:22px">📄</span>
+    <div>
+      <h1>年金通知書ビューア</h1>
+      <div id="header-sub">ZIPをアップロード → PDF保存</div>
+    </div>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div id="layout">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div id="sidebar-upload">
+      <button id="upload-btn" onclick="document.getElementById('file-input').click()">
+        <span>📂</span> ZIPファイルを開く
+      </button>
+      <input type="file" id="file-input" accept=".zip" multiple>
+    </div>
+    <div id="sidebar-history">
+      <div id="history-label">履歴</div>
+      <div id="hist-list"></div>
+      <div id="empty-hist">ZIPを開くと<br>ここに履歴が表示されます</div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div id="main">
+    <div id="error-bar"></div>
+
+    <!-- WELCOME -->
+    <div id="welcome">
+      <div class="big-icon">📦</div>
+      <h2>ZIPファイルをドロップ</h2>
+      <p>年金事務所から受け取ったZIPファイルを<br>ここにドラッグ＆ドロップ、<br>または左の「ZIPファイルを開く」をクリック</p>
+    </div>
+
+    <!-- VIEWER -->
+    <div id="viewer">
+      <div id="doc-tabs-bar"></div>
+      <div id="toolbar">
+        <button class="btn btn-pdf" onclick="printDoc()">🖨 印刷 / PDF保存</button>
+        <button class="btn btn-html" onclick="viewHTML()">🔍 HTML表示</button>
+        <button class="btn btn-ghost" onclick="openUpload()">📂 別のZIPを開く</button>
+        <span id="doc-info" style="font-size:12px;color:var(--muted);margin-left:4px"></span>
+      </div>
+      <div id="iframe-wrap">
+        <iframe id="doc-frame" frameborder="0" scrolling="auto"></iframe>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DROP OVERLAY -->
+<div id="drop-overlay"><div style="font-size:48px">📦</div>ここにドロップ</div>
+
+<!-- LOADING -->
+<div id="loading"><div class="spinner"></div>処理中...</div>
+
+<script>
+  // ===== STATE =====
+  const HIST_KEY = 'nenkin_viewer_history';
+  let currentDocs = [];
+  let currentTabIndex = 0;
+  let history = loadHistory();
+
+  // ===== ELEMENTS =====
+  const fileInput = document.getElementById('file-input');
+  const welcome = document.getElementById('welcome');
+  const viewer = document.getElementById('viewer');
+  const docTabsBar = document.getElementById('doc-tabs-bar');
+  const docFrame = document.getElementById('doc-frame');
+  const docInfo = document.getElementById('doc-info');
+  const histList = document.getElementById('hist-list');
+  const emptyHist = document.getElementById('empty-hist');
+  const errorBar = document.getElementById('error-bar');
+  const loading = document.getElementById('loading');
+  const dropOverlay = document.getElementById('drop-overlay');
+
+  // ===== HISTORY =====
+  function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); }
+    catch { return []; }
+  }
+  function saveHistory() {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(history.slice(0, 30))); }
+    catch {}
+  }
+  function addToHistory(name, docs) {
+    history = history.filter(h => h.name !== name);
+    history.unshift({
+      name,
+      date: new Date().toLocaleString('ja-JP'),
+      docCount: docs.length,
+      docs: docs.map(d => ({ name: d.name, html: d.html }))
+    });
+    saveHistory();
+    renderHistory();
+  }
+  function removeHistory(index) {
+    history.splice(index, 1);
+    saveHistory();
+    renderHistory();
+  }
+  function renderHistory() {
+    histList.innerHTML = '';
+    emptyHist.style.display = history.length ? 'none' : 'block';
+    history.forEach((h, i) => {
+      const div = document.createElement('div');
+      div.className = 'hist-item';
+      div.innerHTML = `
+        <div class="hist-item-icon">📄</div>
+        <div class="hist-item-body">
+          <div class="hist-item-name" title="${escHtml(h.name)}">${escHtml(h.name)}</div>
+          <div class="hist-item-meta">${escHtml(h.date)}　${h.docCount}件</div>
+        </div>
+        <button class="hist-item-del" title="履歴から削除">✕</button>
+      `;
+      div.querySelector('.hist-item-del').addEventListener('click', e => {
+        e.stopPropagation();
+        removeHistory(i);
+      });
+      div.addEventListener('click', () => loadFromHistory(i));
+      histList.appendChild(div);
+    });
+  }
+  function loadFromHistory(index) {
+    const h = history[index];
+    currentDocs = h.docs;
+    buildTabs();
+    showDoc(0);
+    viewer.classList.add('show');
+    welcome.style.display = 'none';
+    highlightHistItem(index);
+  }
+  function highlightHistItem(index) {
+    document.querySelectorAll('.hist-item').forEach((el, i) => {
+      el.classList.toggle('active', i === index);
+    });
+  }
+
+  // ===== FILE INPUT =====
+  fileInput.addEventListener('change', e => {
+    const files = Array.from(e.target.files);
+    if (files.length) processFiles(files);
+    e.target.value = '';
+  });
+
+  function openUpload() {
+    fileInput.click();
+  }
+
+  // ===== DRAG & DROP =====
+  document.addEventListener('dragover', e => { e.preventDefault(); dropOverlay.classList.add('show'); });
+  document.addEventListener('dragleave', e => {
+    if (!e.relatedTarget) dropOverlay.classList.remove('show');
+  });
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    dropOverlay.classList.remove('show');
+    const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.zip'));
+    if (files.length) processFiles(files);
+  });
+
+  // ===== PROCESS =====
+  async function processFiles(files) {
+    showError('');
+    loading.classList.add('show');
+    try {
+      // 複数ZIPを順に処理、最初のものを表示
+      for (const file of files) {
+        await processZip(file);
+      }
+    } catch(e) {
+      showError('エラー: ' + e.message);
+    }
+    loading.classList.remove('show');
+  }
+
+  async function processZip(file) {
+    const zip = await JSZip.loadAsync(file);
+    const files = {};
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (!entry.dir) {
+        const lname = name.toLowerCase();
+        if (lname.endsWith('.xml') || lname.endsWith('.xsl')) {
+          files[name] = await entry.async('text');
+        }
+      }
+    }
+
+    const xmlFiles = Object.keys(files).filter(n => n.toLowerCase().endsWith('.xml'));
+    if (xmlFiles.length === 0) throw new Error('ZIPにXMLファイルが見つかりませんでした: ' + file.name);
+
+    const parser = new DOMParser();
+    const docs = [];
+
+    for (const xmlName of xmlFiles) {
+      const xmlText = files[xmlName];
+      const xmlDoc = parser.parseFromString(xmlText, 'application/xml');
+      if (xmlDoc.querySelector('parsererror')) continue;
+
+      let xslHref = null;
+      for (let i = 0; i < xmlDoc.childNodes.length; i++) {
+        const node = xmlDoc.childNodes[i];
+        if (node.nodeType === 7 && node.target === 'xml-stylesheet') {
+          const m = node.data.match(/href=["']([^"']+)["']/);
+          if (m) xslHref = m[1];
+        }
+      }
+
+      let xslText = null;
+      if (xslHref) {
+        const xslName = Object.keys(files).find(n =>
+          n === xslHref ||
+          n.split('/').pop() === xslHref ||
+          n.toLowerCase() === xslHref.toLowerCase()
+        );
+        if (xslName) xslText = files[xslName];
+      }
+      if (!xslText) {
+        const xslFiles = Object.keys(files).filter(n => n.toLowerCase().endsWith('.xsl'));
+        if (xslFiles.length) xslText = files[xslFiles[0]];
+      }
+
+      // HTMLの末尾に直接追記（</head>置換より確実）
+      const CSS_PATCH = `<style>
+        table.outline { width: 688px !important; margin: 0 auto !important; }
+        pre.oshirase  { white-space: pre-wrap !important; word-break: break-all !important; }
+        td            { word-break: break-all !important; overflow-wrap: break-word !important; }
+        /* div{white-space:pre} の継承を上書き */
+        div           { white-space: normal !important; }
+        @media print  { @page { margin: 10mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+      </style>`;
+
+      let html = '';
+      if (xslText) {
+        const xslDoc = parser.parseFromString(xslText, 'application/xml');
+        const proc = new XSLTProcessor();
+        proc.importStylesheet(xslDoc);
+        const result = proc.transformToDocument(xmlDoc);
+        const rawHtml = new XMLSerializer().serializeToString(result);
+
+        // XMLSerializer の出力を DOMParser で HTML として再解析
+        // → 自己終了 <div/> などが HTML ルールで正しく処理される
+        const parsedDoc = new DOMParser().parseFromString(rawHtml, 'text/html');
+
+        // charset meta がなければ追加
+        if (!parsedDoc.querySelector('meta[charset]')) {
+          const meta = parsedDoc.createElement('meta');
+          meta.setAttribute('charset', 'UTF-8');
+          parsedDoc.head.insertBefore(meta, parsedDoc.head.firstChild);
+        }
+
+        // 後続コンテンツのない page-break-after:always を無効化（印刷時の白紙ページ防止）
+        parsedDoc.querySelectorAll('div').forEach(div => {
+          const s = div.getAttribute('style') || '';
+          if (/page-break-after\s*:\s*always/i.test(s)) {
+            let next = div.nextElementSibling;
+            let hasContent = false;
+            while (next) {
+              if (next.textContent.trim().length > 0) { hasContent = true; break; }
+              next = next.nextElementSibling;
+            }
+            if (!hasContent) {
+              div.style.pageBreakAfter = 'auto';
+              div.style.breakAfter = 'auto';
+            }
+          }
+        });
+
+        // CSS を head に直接 DOM 注入
+        const patchStyle = parsedDoc.createElement('style');
+        patchStyle.textContent = `
+          /* 全要素の white-space をリセットしてテキストを折り返し可能にする */
+          * { white-space: normal !important; word-break: break-all !important; overflow-wrap: break-word !important; }
+          /* pre.oshirase だけは改行を保持しつつ折り返す */
+          pre.oshirase { white-space: pre-wrap !important; }
+          /* 外枠を padding 込みサイズに拡張して内側テーブルが収まるように */
+          /* height:940px の固定値を解除して内容量に合わせる（白紙2枚目防止） */
+          table.outline { width: 688px !important; height: auto !important; margin: 0 auto !important; }
+          /* 内側テーブルが外枠を超えないよう制限 */
+          table.detail  { max-width: 100% !important; }
+          /* ループ末尾の <br class="kaipage"> を非表示にして余白ページ防止 */
+          br.kaipage    { display: none !important; }
+          @media print  { @page { margin: 10mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+        `;
+        parsedDoc.head.appendChild(patchStyle);
+
+        html = '<!DOCTYPE html>\n' + parsedDoc.documentElement.outerHTML;
+      } else {
+        html = `<html><head><meta charset="UTF-8">${CSS_PATCH}<style>body{font-family:monospace;white-space:pre-wrap;padding:20px;font-size:12px}</style></head><body>${escHtml(xmlText)}</body></html>`;
+      }
+
+      const baseName = xmlName.replace(/\.xml$/i, '').split('/').pop();
+      docs.push({ name: baseName, html });
+    }
+
+    if (!docs.length) throw new Error('表示できるドキュメントがありませんでした。');
+
+    currentDocs = docs;
+    addToHistory(file.name, docs);
+    buildTabs();
+    showDoc(0);
+    viewer.classList.add('show');
+    welcome.style.display = 'none';
+  }
+
+  // ===== TABS =====
+  function buildTabs() {
+    docTabsBar.innerHTML = '';
+    currentDocs.forEach((doc, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'doc-tab' + (i === 0 ? ' active' : '');
+      btn.textContent = doc.name;
+      btn.onclick = () => showDoc(i);
+      docTabsBar.appendChild(btn);
+    });
+  }
+
+  function showDoc(index) {
+    currentTabIndex = index;
+    document.querySelectorAll('.doc-tab').forEach((b, i) => b.classList.toggle('active', i === index));
+    const html = currentDocs[index].html;
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    docFrame.src = url;
+    docFrame.onload = () => {
+      try {
+        const iDoc = docFrame.contentDocument;
+        if (!iDoc) return;
+
+        // iframe の DOM に直接スタイルを注入（文字列置換より確実）
+        const style = iDoc.createElement('style');
+        style.textContent = `
+          /*
+            table.outline は width:640px + cellpadding:20〜22px のため
+            内側 table.detail(640px) がはみ出す → 外枠を 688px に拡張
+          */
+          table.outline {
+            width: 688px !important;
+            margin: 0 auto !important;
+          }
+          /* pre のデフォルト white-space:pre を上書き（機構からのお知らせ） */
+          pre.oshirase {
+            white-space: pre-wrap !important;
+            word-break: break-all !important;
+            overflow-wrap: break-word !important;
+          }
+          /* td 内テキストの折り返し */
+          td {
+            word-break: break-all !important;
+            overflow-wrap: break-word !important;
+          }
+          @media print {
+            @page { margin: 10mm; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          }
+        `;
+        iDoc.head.appendChild(style);
+
+      } catch {}
+    };
+    docInfo.textContent = `${index + 1} / ${currentDocs.length} ページ`;
+  }
+
+  // ===== PRINT / DOWNLOAD / HTML =====
+  function getDocHtml() {
+    return currentDocs[currentTabIndex].html;
+  }
+
+  // 新しいウィンドウで開いて印刷ダイアログ
+  function printDoc() {
+    const win = window.open('', '_blank');
+    if (!win) { alert('ポップアップがブロックされました。\nブラウザのアドレスバーのポップアップ許可をクリックしてください。'); return; }
+    win.document.open();
+    win.document.write(getDocHtml());
+    win.document.close();
+    win.addEventListener('load', () => { win.focus(); win.print(); });
+  }
+
+// 変換後のHTMLソースを新しいタブで表示
+  function viewHTML() {
+    const html = getDocHtml();
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    window.open(URL.createObjectURL(blob), '_blank');
+  }
+
+  // ===== UTIL =====
+  function showError(msg) {
+    errorBar.textContent = msg;
+    errorBar.style.display = msg ? 'block' : 'none';
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ===== INIT =====
+  renderHistory();
+  if (history.length) {
+    loadFromHistory(0);
+  }
+</script>
+</body>
+</html>
